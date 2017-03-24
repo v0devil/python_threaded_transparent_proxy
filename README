@@ -1,0 +1,3 @@
+Transparent proxy server.
+
+Uses SQLAlchemy to get the delay value. Could be useful for load testing when need to emulate the slow behaviour of some external system.
