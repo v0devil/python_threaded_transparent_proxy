@@ -1,3 +1,5 @@
+### Author German Syomin (g.syomin@gmail.com)
+
 import socket
 import SocketServer
 import threading
