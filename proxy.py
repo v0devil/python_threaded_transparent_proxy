@@ -1,5 +1,3 @@
-### Author German Syomin (g.syomin@gmail.com)
-
 import socket
 import SocketServer
 import threading
@@ -9,12 +7,24 @@ import sqlalchemy
 import time
 import errno
 from time import sleep
+
+import sys
+
 from sqlalchemy import create_engine, Table, Column, Index, Integer, String, ForeignKey
 from sqlalchemy.dialects.postgresql import DOUBLE_PRECISION, TEXT, TIMESTAMP,BIGINT
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from socket import error as SocketError
 from sqlalchemy.engine import reflection
+
+
+PORT_ = sys.argv[1]
+DESTINATION_ = sys.argv[2]
+PROXY_ID_ =sys.argv[3]
+
+print "PORT_:" + PORT_
+print "DESTINATION_:" + DESTINATION_
+print "PROXY_ID_:" + PROXY_ID_
 
 db_engine = create_engine('postgresql://postgres:postgres@localhost:5432/postgres')
 db_connection = db_engine.connect()
@@ -31,10 +41,10 @@ if not db_engine.dialect.has_table(db_engine.connect(), "delay_table"):
 						)
 	meta.create_all(db_connection)
 proxy = meta.tables['jltom.proxy']
-def get_delay():
+def get_delay(proxy_id):
 	statement = sqlalchemy.sql.select([
 		proxy.c.delay
-	]).where(proxy.c.id == 1)
+	]).where(proxy.c.id == proxy_id)
 	x = execute_statement(statement, False)[0][0]
 	return float(x)
 def execute_statement(statement, with_header):
@@ -68,7 +78,7 @@ class Forwarder(threading.Thread):
 		self.destination = \
 			socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 		self.destination.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-		self.destination.connect(("google.de", 443))
+		self.destination.connect((DESTINATION_, 443))
 		self.connection_string = str(self.destination.getpeername())
 		print "[+] New forwarder: " + self.connection_string
 		#current_forwarders.append(self.connection_string)
@@ -91,7 +101,7 @@ class Forwarder(threading.Thread):
 						self.close_connection()
 						break;
 					print "[<] Received from destination: " + str(len(data))
-				self.source.write_to_source(data)
+					self.source.write_to_source(data)
 		except SocketError as e:
 			if e.errno != errno.ECONNRESET:
 				raise
@@ -103,22 +113,27 @@ class Forwarder(threading.Thread):
 
 
 	def write_to_dest(self, data):
-		print "[>] Sending to destination: " + str(len(data))
-		self.destination.send(data)
+		print "[>] Sending to destination"
+		_, w, _ = select.select([], [self.destination], [], )
+		if w:
+			self.destination.send(data)
+			print "[>] Data was sent to destination: " + str(len(data))
 
 	def close_connection(self):
-		self.source.input_list.remove(self.source.request)
-		self.source.request.shutdown(socket.SHUT_RDWR)
+		try:
+			self.source.request.shutdown(socket.SHUT_RDWR)
+		except socket.error:
+			pass
+		#self.source.request.close()
+
 
 class ThreadedTCPRequestHandler(SocketServer.BaseRequestHandler):
 	def handle(self):
-		self.input_list = []
-		delay = get_delay()
+		delay = get_delay(PROXY_ID_)
 		print "[**] Delay: " + str(delay)
 		time.sleep(delay)
 		self.connection_string = str(self.request.getpeername())
 		self.request.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-		self.input_list.append(self.request)
 		print "[+] Incoming connection:" + str(self.connection_string)
 		#current_incomings.append(self.connection_string)
 		#print current_incomings
@@ -126,7 +141,7 @@ class ThreadedTCPRequestHandler(SocketServer.BaseRequestHandler):
 		f.start()
 		try:
 			while 1:
-				r, _, _ = select.select(self.input_list, [], [], )
+				r, _, _ = select.select([self.request], [], [], )
 				if r:
 					print "[>] Trying to get data from incoming connection"
 					data = self.request.recv(BUFFER_SIZE)
@@ -150,17 +165,19 @@ class ThreadedTCPRequestHandler(SocketServer.BaseRequestHandler):
 		print "[-] Close incoming connection"
 
 	def write_to_source(self, data):
-		print "[<] Sending to incoming connect: " + str(len(data))
-		self.request.send(data)
-
+		print "[<] Sending to incoming connect"
+		_, w, _ = select.select([], [self.request], [], )
+		if w:
+			self.request.send(data)
+			print "[<] Data was sent to incoming connect: " + str(len(data))
 
 
 class ThreadedTCPServer(SocketServer.ThreadingMixIn, SocketServer.TCPServer):
 	pass
 
 if __name__ == "__main__":
-	HOST, PORT = "", 9191
-	server = ThreadedTCPServer((HOST, PORT), ThreadedTCPRequestHandler)
+	HOST, PORT = "", PORT_
+	server = ThreadedTCPServer((HOST, int(PORT)), ThreadedTCPRequestHandler)
 	ip, port = server.server_address
 	server_thread = threading.Thread(target=server.serve_forever)
 	server_thread.daemon = True
